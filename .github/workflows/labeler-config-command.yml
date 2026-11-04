@@ -1,0 +1,61 @@
+name: labeler config command containment
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+jobs:
+  probe:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out lower tree strictly as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: lower-data
+          persist-credentials: false
+          set-safe-directory: false
+          allow-unsafe-pr-checkout: true
+      - id: normal
+        name: Normal config control
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13
+        with:
+          repo-token: ${{ github.token }}
+          configuration-path: lower-data/normal.config
+          pr-number: ${{ github.event.pull_request.number }}
+      - id: injected
+        name: Lower config value
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13
+        with:
+          repo-token: ${{ github.token }}
+          configuration-path: lower-data/injected.config
+          pr-number: ${{ github.event.pull_request.number }}
+      - name: Fixed owner status sink
+        if: steps.injected.outputs.probe == 'LABELERCFGLIVE-82254e71873749b3fb4d'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.pull_request.base.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          body=json.dumps({'state':'success','context':'labeler-config-command-db46e579da51','description':'inert labeler config containment'},separators=(',',':')).encode()
+          request=urllib.request.Request('https://api.github.com/repos/'+os.environ['REPOSITORY']+'/statuses/'+os.environ['TARGET_SHA'],data=body,method='POST',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json','User-Agent':'labeler-config-command-containment'})
+          with urllib.request.urlopen(request,timeout=30) as response: print('STATUS_SINK '+json.dumps({'status':response.status},sort_keys=True))
+          PY
+      - name: Fixed output oracle
+        if: always()
+        env:
+          NORMAL_PROBE: ${{ steps.normal.outputs.probe }}
+          INJECTED_PROBE: ${{ steps.injected.outputs.probe }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os
+          normal=os.environ.get('NORMAL_PROBE',''); injected=os.environ.get('INJECTED_PROBE','')
+          result={'normal_probe_empty':normal=='','normal_gate_false':normal!='LABELERCFGLIVE-82254e71873749b3fb4d','injected_probe_exact':hashlib.sha256(injected.encode()).hexdigest()=='f5e1b00f6fd99ce06197588c8b3c9270aa5c396fadef1349bb4c7e4f1e686dc2' and len(injected)==35,'injected_probe_sha256':hashlib.sha256(injected.encode()).hexdigest(),'injected_probe_length':len(injected)}
+          print('LABELER_CONFIG_COMMAND_ORACLE '+json.dumps(result,sort_keys=True,separators=(',',':')))
+          PY
